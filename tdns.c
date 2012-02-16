@@ -22,8 +22,8 @@
 #define MINARGS 3
 #define USAGE "INPUT_FILE [INPUT_FILE ...] OUTPUT_FILE"
 #define SBUFSIZE 1025
-#define Q_SIZE 50
-#define CONSUMER_THREADS 4
+#define Q_SIZE 1
+#define CONSUMER_THREADS 3
 #define PROCESSING 1
 #define FINISHED 0
 
@@ -37,6 +37,7 @@ struct reader_args {
     int *reader_stat;
     pthread_mutex_t *qmutex;
     pthread_mutex_t *status_mutex;
+    pthread_mutex_t *randmutex;
 };
 
 struct consumer_args {
@@ -46,7 +47,17 @@ struct consumer_args {
     pthread_mutex_t *qmutex;
     pthread_mutex_t *status_mutex;
     pthread_mutex_t *outmutex;
+    pthread_mutex_t *randmutex;
 };
+
+int rsleep(pthread_mutex_t *randmutex){
+    int rsec;
+    pthread_mutex_lock(randmutex);
+    rsec = rand()%100;
+    pthread_mutex_unlock(randmutex);
+    usleep(rsec);
+    return 0;
+}
 
 /* Desc:    A thread safe wrapper for pushing to the queue.
  *          The queue is globally defined with name url_q.
@@ -54,7 +65,7 @@ struct consumer_args {
  * Return:  0 on success. 1 on failure.
  */
 int ts_queue_push(queue* url_q, pthread_mutex_t *qmutex,
-        char item[]) {
+        pthread_mutex_t *randmutex, char item[]) {
     int rc;
 
     while(1){
@@ -62,6 +73,7 @@ int ts_queue_push(queue* url_q, pthread_mutex_t *qmutex,
         if(queue_is_full(url_q)){
             /* Unlock to allow consumers to pull from the queue. */
             pthread_mutex_unlock(qmutex);
+            rsleep(randmutex);
             continue;
         } else {
             break;
@@ -79,15 +91,31 @@ int ts_queue_push(queue* url_q, pthread_mutex_t *qmutex,
 
 /* Desc:    A thread safe wrapper for popping from the queue.
  *          The queue is globally defined with name url_q.
- * Return:  A pointer to the popped item. NULL on failure.
+ * Return:  A pointer to the popped item. NULL is returned
+ *          if either:
+ *          1) The call has failed.
+ *          2) The queue is empty and the readers are done.
  */
-char *ts_queue_pop(queue *url_q, pthread_mutex_t *qmutex) {
-    char *item;
+char *ts_queue_pop(queue *url_q, pthread_mutex_t *qmutex,
+        pthread_mutex_t *randmutex,
+        pthread_mutex_t *status_mutex,
+        int *reader_stat){
+    char *itemp;
 
     while(1){
         pthread_mutex_lock(qmutex);
         if(queue_is_empty(url_q)){
+            /* Return NULL if the q is empty and the readers
+             * are done. */
+            pthread_mutex_lock(status_mutex);
+            if((*reader_stat) == FINISHED){
+                pthread_mutex_unlock(qmutex);
+                pthread_mutex_unlock(status_mutex);
+                return NULL;
+            }
             pthread_mutex_unlock(qmutex);
+            pthread_mutex_unlock(status_mutex);
+            rsleep(randmutex);
             continue;
         } else {
             break;
@@ -95,10 +123,10 @@ char *ts_queue_pop(queue *url_q, pthread_mutex_t *qmutex) {
         }
     }
 
-    item = queue_pop(url_q);
+    itemp = queue_pop(url_q);
     pthread_mutex_unlock(qmutex);
 
-    return item;
+    return itemp;
 }
 
 /* Desc:    Copies string to a location in the heap.
@@ -137,6 +165,7 @@ void *reader(void *arg) {
     int *reader_stat = args->reader_stat;
     pthread_mutex_t *qmutex = args->qmutex;
     pthread_mutex_t *status_mutex = args->status_mutex;
+    pthread_mutex_t *randmutex = args->randmutex;
     char linebuf[SBUFSIZE];
     char *heap_str;
 
@@ -144,7 +173,7 @@ void *reader(void *arg) {
         heap_str = alloc_str(linebuf);
         if(heap_str == NULL)
             return NULL;
-        ts_queue_push(url_q, qmutex, heap_str);
+        ts_queue_push(url_q, qmutex, randmutex, heap_str);
     }
 
     return NULL;
@@ -159,11 +188,19 @@ void *writer(void *arg) {
     pthread_mutex_t *qmutex = args->qmutex;
     pthread_mutex_t *status_mutex = args->status_mutex;
     pthread_mutex_t *outmutex = args->outmutex;
+    pthread_mutex_t *randmutex = args->randmutex;
 
     while(1){
-        str = ts_queue_pop(url_q, qmutex);
+        str = ts_queue_pop(url_q, qmutex, randmutex,
+                status_mutex, reader_stat);
+        /* If a NULL ptr is returned, either:
+         * 1) An error occured.
+         * 2) The queue is empty and the readers are done. */
+        if(str == NULL)
+            break;
         printf("%s\n", str);
-        return NULL;
+        fflush(stdout);
+        free(str);
     }
 
     return NULL;
@@ -189,6 +226,7 @@ int main(int argc, char *argv[]){
     /* Consumer vars */
     pthread_mutex_t outmutex;
     /* Misc vars */
+    pthread_mutex_t randmutex;
     char errorstr[SBUFSIZE];
     int i, rc;
 
@@ -231,6 +269,7 @@ int main(int argc, char *argv[]){
     reader_stat = PROCESSING;
     pthread_mutex_init(&qmutex, NULL);
     pthread_mutex_init(&status_mutex, NULL);
+    pthread_mutex_init(&randmutex, NULL);
     for(i = 0; i < inputfc; i++) {
         /* Init reader arg struct */
         rargs[i].inputfp = inputfps[i];
@@ -238,6 +277,7 @@ int main(int argc, char *argv[]){
         rargs[i].reader_stat = &reader_stat;
         rargs[i].qmutex = &qmutex;
         rargs[i].status_mutex = &status_mutex;
+        rargs[i].randmutex = &randmutex;
         rc = pthread_create(rthreads + i, NULL, reader, rargs + i);
         if(rc){
             printf("ERROR: Return code from pthread_create() is %d\n", rc);
@@ -256,6 +296,7 @@ int main(int argc, char *argv[]){
         cargs[i].qmutex = &qmutex;
         cargs[i].status_mutex = &status_mutex;
         cargs[i].outmutex = &outmutex;
+        cargs[i].randmutex = &randmutex;
         rc = pthread_create(wthreads + i, NULL, writer, cargs + i);
         if(rc){
             printf("ERROR: Return code from pthread_create() is %d\n", rc);
@@ -267,24 +308,26 @@ int main(int argc, char *argv[]){
     for(i = 0; i < inputfc; i++){
         pthread_join(rthreads[i], NULL);
     }
+    /* The readers are finished. */
+    pthread_mutex_lock(&status_mutex);
     reader_stat = FINISHED;
-
-    /* Join the reader threads before closing the files. */
-    for(i = 0; i < CONSUMER_THREADS; i++){
-        pthread_join(wthreads[i], NULL);
-    }
+    pthread_mutex_unlock(&status_mutex);
 
     /* Close the input files */
     for(i=0; i<inputfc; i++){
         fclose(rargs[i].inputfp);
     }
 
+    /* Join the reader threads before closing the files. */
+    for(i = 0; i < CONSUMER_THREADS; i++){
+        pthread_join(wthreads[i], NULL);
+    }
+
     /* Close the ouput file */
     fclose(outputfp);
 
+    /* Cleanup queue */
+    queue_cleanup(&url_q);
+
     pthread_exit(NULL);
 }
-
-
-
-
