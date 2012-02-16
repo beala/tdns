@@ -72,7 +72,7 @@ int ts_queue_push(queue* url_q, pthread_mutex_t *qmutex,
     rc = queue_push(url_q, item);
     pthread_mutex_unlock(qmutex);
     if(rc != QUEUE_SUCCESS)
-        return 1;
+        exit(EXIT_FAILURE);
 
     return 0;
 }
@@ -91,6 +91,7 @@ char *ts_queue_pop(queue *url_q, pthread_mutex_t *qmutex) {
             continue;
         } else {
             break;
+            /* Mutex is still locked! */
         }
     }
 
@@ -178,11 +179,12 @@ int main(int argc, char *argv[]){
     pthread_t rthreads[inputfc];
     pthread_t wthreads[CONSUMER_THREADS];
     struct reader_args rargs[inputfc]; // Array of arguments for reader threads
+    struct consumer_args cargs[CONSUMER_THREADS]; // Array of arguments for reader threads
     /* Queue vars */
     queue url_q;
     pthread_mutex_t qmutex;
     /* Reader args */
-    int reader_stat = PROCESSING;
+    int reader_stat;
     pthread_mutex_t status_mutex;
     /* Consumer vars */
     pthread_mutex_t outmutex;
@@ -203,7 +205,7 @@ int main(int argc, char *argv[]){
         printf("Opening input: %s @ %d\n", argv[i+1], i);
 #endif
         inputfps[i] = fopen(argv[i+1], "r");
-        if(!rargs[i].inputfp) {
+        if(!inputfps[i]) {
             sprintf(errorstr, "Error opening input file: %s", argv[i+1]);
             perror(errorstr);
             return EXIT_FAILURE;
@@ -225,11 +227,12 @@ int main(int argc, char *argv[]){
     }
 
     /* Spawn reader threads */
-    /* Init reader args/vars */
+    /* Init reader vars */
     reader_stat = PROCESSING;
     pthread_mutex_init(&qmutex, NULL);
     pthread_mutex_init(&status_mutex, NULL);
     for(i = 0; i < inputfc; i++) {
+        /* Init reader arg struct */
         rargs[i].inputfp = inputfps[i];
         rargs[i].url_q = &url_q;
         rargs[i].reader_stat = &reader_stat;
@@ -243,8 +246,17 @@ int main(int argc, char *argv[]){
     }
 
     /* Spawn writer threads */
+    /* Init reader vars */
+    pthread_mutex_init(&outmutex, NULL);
     for(i = 0; i < CONSUMER_THREADS; i++) {
-        rc = pthread_create(wthreads + i, NULL, writer, NULL);
+        /* Init consumer args struct */
+        cargs[i].outputfp = outputfp;
+        cargs[i].url_q = &url_q;
+        cargs[i].reader_stat = &reader_stat;
+        cargs[i].qmutex = &qmutex;
+        cargs[i].status_mutex = &status_mutex;
+        cargs[i].outmutex = &outmutex;
+        rc = pthread_create(wthreads + i, NULL, writer, cargs + i);
         if(rc){
             printf("ERROR: Return code from pthread_create() is %d\n", rc);
             exit(EXIT_FAILURE);
@@ -256,6 +268,11 @@ int main(int argc, char *argv[]){
         pthread_join(rthreads[i], NULL);
     }
     reader_stat = FINISHED;
+
+    /* Join the reader threads before closing the files. */
+    for(i = 0; i < CONSUMER_THREADS; i++){
+        pthread_join(wthreads[i], NULL);
+    }
 
     /* Close the input files */
     for(i=0; i<inputfc; i++){
