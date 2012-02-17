@@ -18,6 +18,9 @@
 
 #define DEBUG
 
+#define MAX_IP_LENGTH INET6_ADDRSTRLEN
+#define MAX_NAME_LENGTH 1025
+
 #define MAX_READ_BUF 1024
 #define MINARGS 3
 #define USAGE "INPUT_FILE [INPUT_FILE ...] OUTPUT_FILE"
@@ -155,7 +158,23 @@ char *alloc_str(char string[]) {
 
     return stringp;
 }
+/* Desc: Removes the first newline character in the string
+ *          by setting it to '\0'.
+ * Args: str: pointer to the string.
+ * Return: 0 on success. 1 on failure.
+ */
+int removenl(int max_len, char *str) {
+    int len = strlen(str);
+    int i;
 
+    /* Traverse to '\n' (if it exists) then set it to
+     * '\0'.
+     */
+    for(i=0; i<len && str[i] != '\n' && i<max_len; i++);
+    str[i] = '\0';
+
+    return 0;
+}
 
 void *reader(void *arg) {
 
@@ -164,11 +183,15 @@ void *reader(void *arg) {
     queue *url_q = args->url_q;
     pthread_mutex_t *qmutex = args->qmutex;
     pthread_mutex_t *randmutex = args->randmutex;
-    char linebuf[SBUFSIZE];
+    char linebuf[MAX_NAME_LENGTH];
     char *heap_str;
     int rc;
 
-    while(fscanf(inputfp, "%s\n", linebuf) != EOF){
+    /* Read a line from the file and push it to the q */
+    while(fgets(linebuf, MAX_NAME_LENGTH, inputfp) != NULL){
+        /* Remove any newlines from the end of the URL and move it
+         * to the heap. */
+        removenl(MAX_NAME_LENGTH, linebuf);
         heap_str = alloc_str(linebuf);
         if(heap_str == NULL){
             fprintf(stderr, "Error copying string to the heap.\n");
@@ -187,6 +210,8 @@ void *reader(void *arg) {
 void *writer(void *arg) {
     struct consumer_args *args = arg;
     char *str;
+    char ip_str[MAX_IP_LENGTH];
+    int rc;
     FILE *outputfp = args->outputfp;
     queue *url_q = args->url_q;
     int *reader_stat = args->reader_stat;
@@ -203,9 +228,16 @@ void *writer(void *arg) {
          * 2) The queue is empty and the readers are done. */
         if(str == NULL)
             break;
-        /* Processing goes here */
-        printf("%s\n", str);
-        fflush(stdout);
+        rc = dnslookup(str, ip_str, MAX_IP_LENGTH);
+        if(rc == UTIL_FAILURE){
+            fprintf(stderr, "Failure looking up %s.\n", str);
+            /* Empty ip_str because it probably contains junk */
+            ip_str[0] = '\0';
+        }
+        /* Write the URL and IP to the file */
+        pthread_mutex_lock(outmutex);
+        fprintf(outputfp, "%s, %s\n", str, ip_str);
+        pthread_mutex_unlock(outmutex);
         /* Remove the string from the heap */
         free(str);
     }
