@@ -34,9 +34,7 @@
 struct reader_args {
     FILE *inputfp;
     queue *url_q;
-    int *reader_stat;
     pthread_mutex_t *qmutex;
-    pthread_mutex_t *status_mutex;
     pthread_mutex_t *randmutex;
 };
 
@@ -84,7 +82,7 @@ int ts_queue_push(queue* url_q, pthread_mutex_t *qmutex,
     rc = queue_push(url_q, item);
     pthread_mutex_unlock(qmutex);
     if(rc != QUEUE_SUCCESS)
-        exit(EXIT_FAILURE);
+        return 1;
 
     return 0;
 }
@@ -102,6 +100,7 @@ char *ts_queue_pop(queue *url_q, pthread_mutex_t *qmutex,
         int *reader_stat){
     char *itemp;
 
+    /* Check if the queue is empty. */
     while(1){
         pthread_mutex_lock(qmutex);
         if(queue_is_empty(url_q)){
@@ -123,6 +122,7 @@ char *ts_queue_pop(queue *url_q, pthread_mutex_t *qmutex,
         }
     }
 
+    /* Pop from the queue and return the pointer */
     itemp = queue_pop(url_q);
     pthread_mutex_unlock(qmutex);
 
@@ -162,18 +162,23 @@ void *reader(void *arg) {
     struct reader_args *args = arg;
     FILE *inputfp = args->inputfp;
     queue *url_q = args->url_q;
-    int *reader_stat = args->reader_stat;
     pthread_mutex_t *qmutex = args->qmutex;
-    pthread_mutex_t *status_mutex = args->status_mutex;
     pthread_mutex_t *randmutex = args->randmutex;
     char linebuf[SBUFSIZE];
     char *heap_str;
+    int rc;
 
     while(fscanf(inputfp, "%s\n", linebuf) != EOF){
         heap_str = alloc_str(linebuf);
-        if(heap_str == NULL)
+        if(heap_str == NULL){
+            fprintf(stderr, "Error copying string to the heap.\n");
             return NULL;
-        ts_queue_push(url_q, qmutex, randmutex, heap_str);
+        }
+        rc = ts_queue_push(url_q, qmutex, randmutex, heap_str);
+        if(rc == 1){
+            fprintf(stderr, "There was an error pushing to the queue.\n");
+            break;
+        }
     }
 
     return NULL;
@@ -198,8 +203,10 @@ void *writer(void *arg) {
          * 2) The queue is empty and the readers are done. */
         if(str == NULL)
             break;
+        /* Processing goes here */
         printf("%s\n", str);
         fflush(stdout);
+        /* Remove the string from the heap */
         free(str);
     }
 
@@ -244,7 +251,7 @@ int main(int argc, char *argv[]){
 #endif
         inputfps[i] = fopen(argv[i+1], "r");
         if(!inputfps[i]) {
-            sprintf(errorstr, "Error opening input file: %s", argv[i+1]);
+            fprintf(stderr, "Error opening input file: %s", argv[i+1]);
             perror(errorstr);
             return EXIT_FAILURE;
         }
@@ -268,26 +275,24 @@ int main(int argc, char *argv[]){
     /* Init reader vars */
     reader_stat = PROCESSING;
     pthread_mutex_init(&qmutex, NULL);
-    pthread_mutex_init(&status_mutex, NULL);
     pthread_mutex_init(&randmutex, NULL);
     for(i = 0; i < inputfc; i++) {
         /* Init reader arg struct */
         rargs[i].inputfp = inputfps[i];
         rargs[i].url_q = &url_q;
-        rargs[i].reader_stat = &reader_stat;
         rargs[i].qmutex = &qmutex;
-        rargs[i].status_mutex = &status_mutex;
         rargs[i].randmutex = &randmutex;
         rc = pthread_create(rthreads + i, NULL, reader, rargs + i);
         if(rc){
-            printf("ERROR: Return code from pthread_create() is %d\n", rc);
-            exit(EXIT_FAILURE);
+            fprintf(stderr, "ERROR: Return code from pthread_create() is %d\n", rc);
+            return EXIT_FAILURE;
         }
     }
 
     /* Spawn writer threads */
     /* Init reader vars */
     pthread_mutex_init(&outmutex, NULL);
+    pthread_mutex_init(&status_mutex, NULL);
     for(i = 0; i < CONSUMER_THREADS; i++) {
         /* Init consumer args struct */
         cargs[i].outputfp = outputfp;
@@ -299,8 +304,8 @@ int main(int argc, char *argv[]){
         cargs[i].randmutex = &randmutex;
         rc = pthread_create(wthreads + i, NULL, writer, cargs + i);
         if(rc){
-            printf("ERROR: Return code from pthread_create() is %d\n", rc);
-            exit(EXIT_FAILURE);
+            fprintf(stderr, "ERROR: Return code from pthread_create() is %d\n", rc);
+            return EXIT_FAILURE;
         }
     }
 
