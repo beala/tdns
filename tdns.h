@@ -1,3 +1,6 @@
+#ifndef TDNS_H
+#define TDNS_H
+
 #define MAX_IP_LENGTH INET6_ADDRSTRLEN
 #define MAX_NAME_LENGTH 1025
 #define MIN_RESOLVER_THREADS 2
@@ -75,3 +78,5 @@ void *reader(void *arg);
  * Return:  NULL
  */
 void *writer(void *arg);
+
+#endif
