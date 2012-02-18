@@ -1,18 +1,18 @@
 ###Introduction###
-tdns is a threaded DNS lookup utility.
+multi-lookup is a threaded DNS lookup utility.
 
 ###Compilation###
 ```
     % make
 ```
-The binary will be named `tdns`.
+The binary will be named `multi-lookup`.
 
 ###Usage###
 ```
-    % tdns INPUT_FILE [INPUT_FILE [...]] OUTPUT_FILE
+    % multi-lookup INPUT_FILE [INPUT_FILE [...]] OUTPUT_FILE
 ```
 The input files are text files with one domain per line. Blank lines are ignored.
-tdns will then write the domain names and IP addresses associated with those domains to the output file.
+multi-lookup will then write the domain names and IP addresses associated with those domains to the output file.
 
 ###Example###
 Input file:

@@ -15,7 +15,7 @@
 
 #include "queue.h"
 #include "util.h"
-#include "tdns.h"
+#include "multi-lookup.h"
 
 int rsleep(pthread_mutex_t *randmutex){
     int rsec;
