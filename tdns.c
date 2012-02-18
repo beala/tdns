@@ -15,39 +15,7 @@
 
 #include "queue.h"
 #include "util.h"
-
-#define DEBUG
-
-#define MAX_IP_LENGTH INET6_ADDRSTRLEN
-#define MAX_NAME_LENGTH 1025
-
-#define MINARGS 3
-#define USAGE "INPUT_FILE [INPUT_FILE ...] OUTPUT_FILE"
-#define SBUFSIZE 1025
-#define Q_SIZE 1
-#define PROCESSING 1
-#define FINISHED 0
-
-//pthread_mutex_t qmutex;
-//queue url_q;
-//int reader_status;
-
-struct reader_args {
-    FILE *inputfp;
-    queue *url_q;
-    pthread_mutex_t *qmutex;
-    pthread_mutex_t *randmutex;
-};
-
-struct consumer_args {
-    FILE *outputfp;
-    queue *url_q;
-    int *reader_stat;
-    pthread_mutex_t *qmutex;
-    pthread_mutex_t *status_mutex;
-    pthread_mutex_t *outmutex;
-    pthread_mutex_t *randmutex;
-};
+#include "tdns.h"
 
 int rsleep(pthread_mutex_t *randmutex){
     int rsec;
@@ -130,32 +98,6 @@ char *ts_queue_pop(queue *url_q, pthread_mutex_t *qmutex,
     return itemp;
 }
 
-/* Desc:    Copies string to a location in the heap.
- * Args:    string: the string to be copied, ending with \0.
- *            This will explode in your face if it doesn't have a
- *            \0.
- * Return:  A pointer to the copy. NULL on failure.
- */
-char *alloc_str(char string[]) {
-    int len = 0;
-    int i;
-    char *stringp;
-
-    /* Get the length of string, including \0 */
-    while(string[len++] != '\0')
-        ;
-
-    stringp = malloc(sizeof(char)*len);
-    if(stringp == NULL) {
-        return NULL;
-    }
-
-    for(i=0; i<len; i++){
-        stringp[i] = string[i];
-    }
-
-    return stringp;
-}
 /* Desc: Removes the first newline character in the string
  *          by setting it to '\0'.
  * Args: str: pointer to the string.
@@ -187,18 +129,22 @@ void *reader(void *arg) {
 
     /* Read a line from the file and push it to the q */
     while(fgets(linebuf, MAX_NAME_LENGTH, inputfp) != NULL){
-        /* Remove any newlines from the end of the URL and move it
-         * to the heap. */
+        /* Remove any newlines from the end of the URL */
         removenl(MAX_NAME_LENGTH, linebuf);
-        heap_str = alloc_str(linebuf);
+        /* Skip blank lines */
+        if(linebuf[0] == '\0')
+            continue;
+        /* Copy the string to the heap */
+        heap_str = strndup(linebuf, MAX_NAME_LENGTH - 1);
         if(heap_str == NULL){
             fprintf(stderr, "Error copying string to the heap.\n");
             return NULL;
         }
+        /* Push a ptr to the string onto the q */
         rc = ts_queue_push(url_q, qmutex, randmutex, heap_str);
         if(rc == 1){
             fprintf(stderr, "There was an error pushing to the queue.\n");
-            break;
+            return NULL;
         }
     }
 
@@ -230,7 +176,7 @@ void *writer(void *arg) {
         if(rc == UTIL_FAILURE){
             /* dnslookup prints an error, so no need to print
              * one here.
-            /* Empty ip_str because it probably contains junk */
+             * Empty ip_str because it probably contains junk */
             ip_str[0] = '\0';
         }
         /* Write the URL and IP to the file */
@@ -282,17 +228,25 @@ int main(int argc, char *argv[]){
         j++;
         if(inputfps[i] == NULL) {
             fprintf(stderr, "Error opening input file: %s\n", argv[j-1]);
+            perror("");
             /* Reduce the file count, and decrement i so the next
              * iteration will store to the same index */
             inputfc--;
             i--;
+            continue;
         }
+    }
+
+    /* Check that there are input files */
+    if(inputfc < 1){
+        fprintf(stderr, "No valid input files. Terminating.\n");
+        return EXIT_FAILURE;
     }
 
     /* Open the output file */
     outputfp = fopen(argv[argc-1], "w");
     if(!outputfp){
-        perror("Error opening ouput file.");
+        perror("Error opening ouput file");
         return EXIT_FAILURE;
     }
 
@@ -324,6 +278,8 @@ int main(int argc, char *argv[]){
     /* Spawn writer threads */
     /* Get the number of cores */
     core_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    if(core_count < MIN_RESOLVER_THREADS)
+        core_count = MIN_RESOLVER_THREADS;
     wthreads = malloc(sizeof(pthread_t)*core_count);
     if(wthreads == NULL) {
         fprintf(stderr, "Error mallocing.\n");

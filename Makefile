@@ -9,7 +9,7 @@ all: tdns
 tdns: tdns.o queue.o util.o
 	$(CC) $(LFLAGS) $^ -o $@
 
-tdns.o: tdns.c
+tdns.o: tdns.c tdns.h
 	$(CC) $(CFLAGS) $<
 
 queue.o: queue.c queue.h
