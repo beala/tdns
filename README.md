@@ -10,6 +10,7 @@ tdns will then write the domain names and IP addresses associated with those dom
 
 ###Example###
 Input file:
+
 ```
     google.com
     yahoo.com
@@ -18,6 +19,7 @@ Input file:
 ```
 
 Output:
+
 ```
     github.com, 207.97.227.239
     yahoo.com, 98.139.183.24
