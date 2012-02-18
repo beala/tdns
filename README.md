@@ -1,6 +1,12 @@
 ###Introduction###
 tdns is a threaded DNS lookup utility.
 
+###Compilation###
+```
+    % make
+```
+The binary will be named `tdns`.
+
 ###Usage###
 ```
     % tdns INPUT_FILE [INPUT_FILE [...]] OUTPUT_FILE
