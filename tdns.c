@@ -228,7 +228,8 @@ void *writer(void *arg) {
             break;
         rc = dnslookup(str, ip_str, MAX_IP_LENGTH);
         if(rc == UTIL_FAILURE){
-            fprintf(stderr, "Failure looking up %s.\n", str);
+            /* dnslookup prints an error, so no need to print
+             * one here.
             /* Empty ip_str because it probably contains junk */
             ip_str[0] = '\0';
         }
@@ -246,7 +247,7 @@ void *writer(void *arg) {
 int main(int argc, char *argv[]){
 
     /* File vars */
-    const int inputfc = argc - 2;     // Number of input files.
+    int inputfc = argc - 2;     // Number of input files.
     FILE *outputfp;             // Pointer to the output file.
     FILE *inputfps[inputfc];
     /* Threads vars */
@@ -265,8 +266,7 @@ int main(int argc, char *argv[]){
     int core_count;
     /* Misc vars */
     pthread_mutex_t randmutex;
-    char errorstr[SBUFSIZE];
-    int i, rc;
+    int i, j, rc;
 
     /* Check the args */
     if(argc < MINARGS){
@@ -276,12 +276,16 @@ int main(int argc, char *argv[]){
     }
 
     /* Open the input files */
+    j = 0; //argv index.
     for(i=0; i<inputfc; i++){
-        inputfps[i] = fopen(argv[i+1], "r");
-        if(!inputfps[i]) {
-            fprintf(stderr, "Error opening input file: %s", argv[i+1]);
-            perror(errorstr);
-            return EXIT_FAILURE;
+        inputfps[i] = fopen(argv[j+1], "r");
+        j++;
+        if(inputfps[i] == NULL) {
+            fprintf(stderr, "Error opening input file: %s\n", argv[j-1]);
+            /* Reduce the file count, and decrement i so the next
+             * iteration will store to the same index */
+            inputfc--;
+            i--;
         }
     }
 
