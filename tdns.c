@@ -18,10 +18,18 @@
 #include "tdns.h"
 
 int rsleep(pthread_mutex_t *randmutex){
-    int rsec;
-    pthread_mutex_lock(randmutex);
+    int rsec, rc;
+    rc = pthread_mutex_lock(randmutex);
+    if(rc != 0) {
+        fprintf(stderr, "There was an error locking the mutex.\n");
+        return 1;
+    }
     rsec = rand()%100;
-    pthread_mutex_unlock(randmutex);
+    rc = pthread_mutex_unlock(randmutex);
+    if(rc != 0) {
+        fprintf(stderr, "There was an error unlocking the mutex.\n");
+        return 1;
+    }
     usleep(rsec);
     return 0;
 }
@@ -36,10 +44,18 @@ int ts_queue_push(queue* url_q, pthread_mutex_t *qmutex,
     int rc;
 
     while(1){
-        pthread_mutex_lock(qmutex);
+        rc = pthread_mutex_lock(qmutex);
+        if(rc != 0) {
+            fprintf(stderr, "There was an error locking the mutex.\n");
+            return 1;
+        }
         if(queue_is_full(url_q)){
             /* Unlock to allow consumers to pull from the queue. */
-            pthread_mutex_unlock(qmutex);
+            rc = pthread_mutex_unlock(qmutex);
+            if(rc != 0) {
+                fprintf(stderr, "There was an error unlocking the mutex.\n");
+                return 1;
+            }
             rsleep(randmutex);
             continue;
         } else {
@@ -68,21 +84,38 @@ char *ts_queue_pop(queue *url_q, pthread_mutex_t *qmutex,
         pthread_mutex_t *status_mutex,
         int *reader_stat){
     char *itemp;
+    int rc;
 
     /* Check if the queue is empty. */
     while(1){
-        pthread_mutex_lock(qmutex);
+        rc = pthread_mutex_lock(qmutex);
+        if(rc != 0) {
+            fprintf(stderr, "There was an error locking the mutex.\n");
+            return NULL;
+        }
         if(queue_is_empty(url_q)){
             /* Return NULL if the q is empty and the readers
              * are done. */
-            pthread_mutex_lock(status_mutex);
-            if((*reader_stat) == FINISHED){
-                pthread_mutex_unlock(qmutex);
-                pthread_mutex_unlock(status_mutex);
+            rc = pthread_mutex_lock(status_mutex);
+            if(rc != 0) {
+                fprintf(stderr, "There was an error locking the mutex.\n");
                 return NULL;
             }
-            pthread_mutex_unlock(qmutex);
-            pthread_mutex_unlock(status_mutex);
+            if((*reader_stat) == FINISHED){
+                rc = pthread_mutex_unlock(qmutex);
+                rc = pthread_mutex_unlock(status_mutex) || rc;
+                if(rc != 0) {
+                    fprintf(stderr, "There was an error unlocking the mutex.\n");
+                    return NULL;
+                }
+                return NULL;
+            }
+            rc = pthread_mutex_unlock(qmutex);
+            rc = pthread_mutex_unlock(status_mutex) || rc;
+            if(rc != 0) {
+                fprintf(stderr, "There was an error unlocking the mutex.\n");
+                return NULL;
+            }
             rsleep(randmutex);
             continue;
         } else {
@@ -93,7 +126,11 @@ char *ts_queue_pop(queue *url_q, pthread_mutex_t *qmutex,
 
     /* Pop from the queue and return the pointer */
     itemp = queue_pop(url_q);
-    pthread_mutex_unlock(qmutex);
+    rc = pthread_mutex_unlock(qmutex);
+    if(rc != 0) {
+        fprintf(stderr, "There was an error unlocking the mutex.\n");
+        return NULL;
+    }
 
     return itemp;
 }
@@ -180,9 +217,17 @@ void *writer(void *arg) {
             ip_str[0] = '\0';
         }
         /* Write the URL and IP to the file */
-        pthread_mutex_lock(outmutex);
+        rc = pthread_mutex_lock(outmutex);
+        if(rc != 0){
+            fprintf(stderr, "There was an error locking the mutex.\n");
+            return NULL;
+        }
         fprintf(outputfp, "%s, %s\n", str, ip_str);
-        pthread_mutex_unlock(outmutex);
+        rc = pthread_mutex_unlock(outmutex);
+        if(rc != 0){
+            fprintf(stderr, "There was an error unlocking the mutex.\n");
+            return NULL;
+        }
         /* Remove the string from the heap */
         free(str);
     }
@@ -227,7 +272,7 @@ int main(int argc, char *argv[]){
         inputfps[i] = fopen(argv[j+1], "r");
         j++;
         if(inputfps[i] == NULL) {
-            fprintf(stderr, "Error opening input file: %s\n", argv[j-1]);
+            fprintf(stderr, "Error opening input file: %s\n", argv[j]);
             perror("");
             /* Reduce the file count, and decrement i so the next
              * iteration will store to the same index */
@@ -260,8 +305,12 @@ int main(int argc, char *argv[]){
     /* Spawn reader threads */
     /* Init reader vars */
     reader_stat = PROCESSING;
-    pthread_mutex_init(&qmutex, NULL);
-    pthread_mutex_init(&randmutex, NULL);
+    rc = pthread_mutex_init(&qmutex, NULL);
+    rc = pthread_mutex_init(&randmutex, NULL) || rc;
+    if(rc != 0){
+        fprintf(stderr, "There was an error initializing the mutex.\n");
+        return EXIT_FAILURE;
+    }
     for(i = 0; i < inputfc; i++) {
         /* Init reader arg struct */
         rargs[i].inputfp = inputfps[i];
@@ -286,8 +335,12 @@ int main(int argc, char *argv[]){
         return EXIT_FAILURE;
     }
     /* Init writer mutexes */
-    pthread_mutex_init(&outmutex, NULL);
-    pthread_mutex_init(&status_mutex, NULL);
+    rc = pthread_mutex_init(&outmutex, NULL);
+    rc = pthread_mutex_init(&status_mutex, NULL) || rc;
+    if(rc != 0){
+        fprintf(stderr, "There was an error initializing the mutex.\n");
+        return EXIT_FAILURE;
+    }
     /* Init writer args */
     cargs.outputfp = outputfp;
     cargs.url_q = &url_q;
@@ -307,25 +360,49 @@ int main(int argc, char *argv[]){
 
     /* Join the reader threads before closing the files. */
     for(i = 0; i < inputfc; i++){
-        pthread_join(rthreads[i], NULL);
+        rc = pthread_join(rthreads[i], NULL);
+        if(rc != 0){
+            fprintf(stderr, "There was an error joining the threads.\n");
+            return EXIT_FAILURE;
+        }
     }
     /* The readers are finished. */
-    pthread_mutex_lock(&status_mutex);
+    rc = pthread_mutex_lock(&status_mutex);
+    if(rc != 0){
+        fprintf(stderr, "There was an error locking the mutex.\n");
+        return EXIT_FAILURE;
+    }
     reader_stat = FINISHED;
-    pthread_mutex_unlock(&status_mutex);
+    rc = pthread_mutex_unlock(&status_mutex);
+    if(rc != 0){
+        fprintf(stderr, "There was an error unlocking the mutex.\n");
+        return EXIT_FAILURE;
+    }
 
     /* Close the input files */
     for(i=0; i<inputfc; i++){
-        fclose(rargs[i].inputfp);
+        rc = fclose(rargs[i].inputfp);
+        if(rc != 0){
+            fprintf(stderr, "There was an error closing an input file. ");
+            perror("");
+        }
     }
 
     /* Join the reader threads before closing the files. */
     for(i = 0; i < core_count; i++){
-        pthread_join(wthreads[i], NULL);
+        rc = pthread_join(wthreads[i], NULL);
+        if(rc != 0){
+            fprintf(stderr, "There was an error joining the threads.\n");
+            return EXIT_FAILURE;
+        }
     }
 
     /* Close the ouput file */
-    fclose(outputfp);
+    rc = fclose(outputfp);
+    if(rc != 0){
+        fprintf(stderr, "There was an error closing the output file. ");
+        perror("");
+    }
 
     /* Free wthreads */
     free(wthreads);
